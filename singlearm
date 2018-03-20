@@ -1,0 +1,206 @@
+#!/bin/bash
+
+echo "testinggg"
+
+# (slwa: single lwa command and state. 1 and 2 are motor groups)
+CHANNELS="cmd1 state1"
+
+
+#****************
+# DEFINITIONS
+#****************
+
+#CAN Interfaces
+CANBUS_0=0 #First four motor set
+CANBUS_1=1 #Second four motor set
+
+ACH_MODE=666
+
+STARTCOLOR="\033[1;32m"
+STOPCOLOR="\033[1;31m"
+QUESTIONCOLOR="\033[1;35m"
+NOCOLOR="\033[0;37m"
+
+
+#Joint limits - radians
+JOINT_1_MIN=-1.507       # PI/2, Joint limit for rotational joints
+JOINT_1_MAX=1.507        # PI/2, Joint limit for rotational joints
+JOINT_2_MIN=-1.507       # PI/2, Joint limit for rotational joints
+JOINT_2_MAX=1.507        # PI/2, Joint limit for rotational joints
+JOINT_3_MIN=-1.507       # PI/2, Joint limit for rotational joints
+JOINT_3_MAX=1.507        # PI/2, Joint limit for rotational joints
+JOINT_4_MIN=-1.507       # PI/2, Joint limit for rotational joints
+JOINT_4_MAX=1.507        # PI/2, Joint limit for rotational joints
+JOINT_5_MIN=-1.507       # PI/2, Joint limit for rotational joints
+JOINT_5_MAX=1.507        # PI/2, Joint limit for rotational joints
+JOINT_6_MIN=-1.507       # PI/2, Joint limit for rotational joints
+JOINT_6_MAX=1.507        # PI/2, Joint limit for rotational joints
+JOINT_7_MIN=-1.507       # PI/2, Joint limit for rotational joints
+JOINT_7_MAX=1.507        # PI/2, Joint limit for rotational joints
+ENDEFF_MIN=-1.0          # Limit for end effector
+ENDEFF_MAX=1.0           # Limit for end effector
+
+
+#**************
+# FUNCTIONS
+#**************
+
+ShowUsage() {
+	#complete later
+}
+
+CreateAllAchChan() {
+	ach mk -1 -o $ACH_MODE $state1	-m 10 -n $((24*7 + 512))
+	ach mk -1 -o $ACH_MODE $cmd1 	-m 10 -n $((8*7  + 512)) 
+}
+
+DeleteAllAchChan(){
+	sudo ach rm $cmd1
+	sudo ach rm $state1
+}
+
+
+#Load esdcan/mount CAN Channels
+#(This works)
+LoadDrivers() {
+
+  # Load the driver
+  lsmod | grep -q esdcan
+  if [ $? -eq 1 ]
+  then
+     echo "esdcan module was not loaded yet";
+     sudo insmod /lib/modules/3.16.0-4-amd64/kernel/drivers/esdcan/esdcan-pci405.ko
+     echo "Here, just loaded it for you."
+  else
+     echo "esdcan module is already loaded"
+  fi
+
+<< END ********************
+  # Create device files can0/1 (one per group)
+  cd /dev
+  for i in `seq 0 1`
+  do
+    name="can${i}";
+    if ! [ -e $name ]
+    then
+       sudo mknod --mode=a+rw $name c 53 $i;
+    fi
+  done
+      *********************
+END
+
+  echo "Finished LoadDrivers"
+}
+
+
+#Set current limits on each joint
+
+
+#Launch pciod asa daemon pub/sub to ach channels
+StartAllProcess()
+{
+	        echo -e $STARTCOLOR "\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ STARTING DAEMONS ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" $NOCOLOR 
+
+	#Set up the arm and f/t sensor
+	echo -e $STARTCOLOR "\nStarting single arm and f/t daemons" $NOCOLOR
+	
+	# Setting up for pciod daemon
+	sns -a pciod-singlearm; result=$?
+	if [ $result -eq 0 ]; 
+	then 
+		echo "pciod-singlearm daemon already alive"
+	else
+		#Print the states to check for HOK
+		pciod -Q state -b $CANBUS_0 -m 1 -m 2 -m 3 -m 4
+		pciod -Q state -b $CANBUS_1 -m 5 -m 6 -m 7 -m 8
+		pciod -S param_min_fpos \ 
+			-b $CANBUS_0 -m 1 -x $JOINT_1_MIN \
+			-b $CANBUS_0 -m 2 -x $JOINT_2_MIN \
+			-b $CANBUS_0 -m 3 -x $JOINT_3_MIN \
+			-b $CANBUS_0 -m 4 -x $JOINT_4_MIN \
+			-b $CANBUS_1 -m 5 -x $JOINT_5_MIN \
+			-b $CANBUS_1 -m 6 -x $JOINT_6_MIN \
+			-b $CANBUS_1 -m 7 -x $JOINT_7_MIN \
+			-b $CANBUS_1 -m 8 -x $ENDEFF_MIN \
+		pciod -S param_max_fpos \
+			-b $CANBUS_0 -m 1 -x $JOINT_1_MAX \
+			-b $CANBUS_0 -m 2 -x $JOINT_2_MAX \
+			-b $CANBUS_0 -m 3 -x $JOINT_3_MAX \
+			-b $CANBUS_0 -m 4 -x $JOINT_4_MAX \
+			-b $CANBUS_1 -m 5 -x $JOINT_5_MAX \
+			-b $CANBUS_1 -m 6 -x $JOINT_6_MAX \
+			-b $CANBUS_1 -m 7 -x $JOINT_7_MAX \
+			-b $CANBUS_1 -m 8 -x $ENDEFF_MAX \
+			
+		# The daemon call for right arm
+		pciod -d -I pciod-singlearm \
+			-c $cmd1 -s $state1 \
+			-b $CANBUS_0 -m 1 -m 2 -m 3 -m 4 \
+			-b $CANBUS_1 -m 5 -m 5 -m 7 -m 8 -v -v
+		check "pciod-singlearm"
+		check_hoks "pciod-singlearm" 7
+	fi
+
+}
+
+StopAllProcess()
+{
+
+	echo -e $STOPCOLOR "\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ STOPPING DAEMONS ^^^^^^^^^^^^\
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" $NOCOLOR
+
+echo -e $STOPCOLOR "\nSending SIGTERM to pciod daemons" $NOCOLOR
+	
+	sns -k pciod-singlearm
+
+echo -e $STOPCOLOR "\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ STOP COMPLETE ^^^^^^^^^^^^^^^^^^\
+^^^^^^^^^^^^^^^^^^^^^^^^^\n" $NOCOLOR
+}
+
+#***************
+# Stop
+#**************
+
+# Kill pciod
+END
+
+
+#unmount esdcan stuff
+
+#*******************
+#  MAIN  #
+#*******************
+case "$1" in
+	load)
+		LoadDrivers
+		;;
+	
+	start)
+		#EchoHWMode?
+        CreateAllAchChannels
+		StartAllProcess
+        ;;
+	
+	restart)
+		#ReadHWMode?
+		StopAllProcess
+		StartAllProcess
+		;;
+	
+	status)
+		PrintInfo
+		;;
+    
+    stop)
+		DeleteAllAchChannels
+		;;
+
+	*)
+		echo "[ERROR] Invalid command. Options are start/stop/load/rm/mk/steal/zero NEW_OWNER/expunge"
+        exit 1
+        ;;
+esac
+
+exit 0
+
+#eof
